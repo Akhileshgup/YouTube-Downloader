@@ -22,6 +22,7 @@
   #$debug=true; // debug mode on
   $debug=false; // debug mode off
   
+  $CipherAPIkey = "loveLOTRfantasy";
   
   /**********|| Don't edit below ||***************/
   include_once('curl.php');
