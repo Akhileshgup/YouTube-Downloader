@@ -30,7 +30,51 @@ function is_chrome(){
 	}
 	return false;	// if isn't chrome return false
 }
-
+// string helper function
+function strbtwn($content,$start,$end){
+	$r = explode($start, $content);
+	if (isset($r[1])){
+		$r = explode($end, $r[1]);
+		return $r[0];
+	}
+	return '';
+}
+// signature decoding 
+// parse the python string operation into php string operation
+function decrypt($sig, $algo){			
+	$funcarr = explode(' + ', $algo);
+	$decrypt = '';
+	foreach($funcarr as $singfunc){
+		$singfunc = substr($singfunc,2,-1);
+		$operators = explode(':', $singfunc);
+		if (sizeof($operators) == 1) {
+			$decrypt .= $sig[$operators[0]];
+		}
+		if (sizeof($operators) == 2) {
+			if($operators[0] == ''){
+				$decrypt .= substr($sig, 0 ,$operators[1]);
+			}
+			if($operators[1] == ''){
+				$decrypt .= substr($sig, $operators[0]);
+			}
+			if($operators[0] >= 0 && $operators[1] >= 0){
+				$decrypt .= substr($sig, $operators[0], $operators[1] - $operators[0]);
+			}
+		}
+		if (sizeof($operators) == 3) {
+			if($operators[0] == '' && $operators[1] == ''){
+				$decrypt .= strrev($sig);
+			}
+			if($operators[0] >=0 && $operators[1] == '' && $operators[0] != ''){
+				$decrypt .= strrev(substr($sig, 0, $operators[0] + 1));
+			}
+			if($operators[0] >=0 && $operators[1] >= 0 && $operators[0] != '' && $operators[1] != ''){
+				$decrypt .= strrev(substr($sig, $operators[1] + 1, $operators[0] - $operators[1]));
+			}
+		}
+	}
+	return $decrypt;
+}
 if(isset($_REQUEST['videoid'])) {
 	$my_id = $_REQUEST['videoid'];
 	if(strlen($my_id)>11){
@@ -142,12 +186,12 @@ if ($my_type == 'Download') {
 } // end of if for type=Download
 
 /* First get the video info page for this video id */
-$my_video_info = 'http://www.youtube.com/get_video_info?&video_id='. $my_id;
+$my_video_info = "http://www.youtube.com/get_video_info?video_id=".$my_id."&el=vevo&el=embedded&hl=en_US";
 $my_video_info = curlGet($my_video_info);
 
 /* TODO: Check return from curl for status code */
 
-$thumbnail_url = $title = $url_encoded_fmt_stream_map = $type = $url = '';
+$thumbnail_url = $title = $url_encoded_fmt_stream_map = $type = $url = $use_cipher_signature = '';
 
 parse_str($my_video_info);
 
@@ -163,7 +207,63 @@ echo '</div>';
 
 $my_title = $title;
 $cleanedtitle = clean($title);
+$ciphered = (isset($use_cipher_signature) && $use_cipher_signature == 'True') ? true : false;
+if($ciphered){
+	// youtube webpage url formation
+	$yt_url = 'http://www.youtube.com/watch?v='.$my_id.'&gl=US&persist_gl=1&hl=en&persist_hl=1';
+	
+	// if cipher is true then we have to change the plan and get the details from the video's youtube wbe page
+	$yt_html = file_get_contents($yt_url);
+				
+	// parse for the script containing the configuration
+	preg_match('/ytplayer.config = {(.*?)};/',$yt_html,$match);
+	$yt_object = @json_decode('{'.$match[1].'}') ;
+	
+	/// check if we are able to parse data
+	if(!is_object($yt_object)){
+		//'Sorry! Unable to parse Data';
+		echo 'Error Code 1';
+	}else{
+			
+		// parse available formats
+		$url_encoded_fmt_stream_map = $yt_object->args->url_encoded_fmt_stream_map;
+		// get the player id from assets section
+		$player_id = strbtwn($yt_object->assets->js,'html5player-','.js');
+		$player_id = explode("/", $player_id);
+		$player_id = $player_id[0];
+														
+		// get the algo dictionary
+		// first check if the file exists
+		if(file_exists('./algo.json'))
+			$algos = json_decode(file_get_contents('algo.json'),true);
+		else{
+			// API call to fetch the algo dictionary
+			$algos_dict = file_get_contents("http://api.gitnol.com/getAlgo.php?playerID=".$player_id."&apikey=".$CipherAPIkey);
+					
+			// saving the algo dictonary in local env for easy access
+			// Note: Developers should save the dictionary in their local env. 
+			// Only make the API call for the new player ids which is not present in the algo dictionary.
+			// Repeated violation will results in IP ban.
+			file_put_contents('algo.json', $algos_dict);
+						
+			$algos = json_decode($algos_dict,true);
+		}
 
+		/// check if the algo exist for the given player id
+		if(!array_key_exists($player_id, $algos)){
+						
+			// if the algo dictionary is old then fetch a new one
+			$algos_dict = file_get_contents("http://api.gitnol.com/getAlgo.php?playerID=".$player_id."&apikey=".$CipherAPIkey);
+			file_put_contents('algo.json', $algos_dict);
+						
+			$algos = json_decode($algos_dict,true);
+			$algo = $algos[$player_id][1];
+						 
+		}else{
+			$algo = $algos[$player_id][1];
+		}		
+	} 
+}
 if(isset($url_encoded_fmt_stream_map)) {
 	/* Now get the url_encoded_fmt_stream_map, and explode on comma */
 	$my_formats_array = explode(',',$url_encoded_fmt_stream_map);
@@ -185,7 +285,7 @@ if (count($my_formats_array) == 0) {
 /* create an array of available download formats */
 $avail_formats[] = '';
 $i = 0;
-$ipbits = $ip = $itag = $sig = $quality = '';
+$ipbits = $ip = $itag = $sig = $s = $quality = '';
 $expire = time(); 
 
 foreach($my_formats_array as $format) {
@@ -194,7 +294,10 @@ foreach($my_formats_array as $format) {
 	$avail_formats[$i]['quality'] = $quality;
 	$type = explode(';',$type);
 	$avail_formats[$i]['type'] = $type[0];
-	$avail_formats[$i]['url'] = urldecode($url) . '&signature=' . $sig;
+	if($ciphered)
+		$avail_formats[$i]['url'] = urldecode($url) . '&signature=' . decrypt($s, $algo);
+	else
+		$avail_formats[$i]['url'] = urldecode($url) . '&signature=' . $sig;
 	parse_str(urldecode($url));
 	$avail_formats[$i]['expires'] = date("G:i:s T", $expire);
 	$avail_formats[$i]['ipbits'] = $ipbits;
