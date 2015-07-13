@@ -16,8 +16,12 @@ http://api.gitnol.com
 Working demo:
 http://www.vidnol.com/ytd/
 
-How to add support for cipher videos:
+Installation:
+------------------------------------------------------
 - Add the Cipher API key in the config.php
+- Create an empty file algo.json file and add it and set permission 777 
+- All set, ready to go.
+------------------------------------------------------
 
 For API key please send your request to akhilesh@bitnol.com
 
